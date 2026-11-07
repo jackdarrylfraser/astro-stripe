@@ -3,28 +3,6 @@ import SiteLayout from '../../layouts/SiteLayout.astro';
 ---
 
 <SiteLayout title="Completing subscription | Astro Stripe">
-  <h1>Finishing your subscription</h1>
-  <p id="status" role="status" aria-live="polite">Verifying your checkout with Stripe…</p>
-  <script define:vars={{ sessionId: Astro.url.searchParams.get('session_id') }}>
-    const status = document.querySelector<HTMLElement>('#status');
-    if (!sessionId) {
-      if (status) status.textContent = 'Checkout session is missing. Please contact support.';
-    } else {
-      fetch('/api/stripe/checkout-complete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId }),
-      }).then((response) => {
-        if (response.ok) {
-          window.location.assign('/members');
-          return;
-        }
-        if (status) {
-          status.textContent = 'We could not verify this checkout. If you were charged, please contact support.';
-        }
-      }).catch(() => {
-        if (status) status.textContent = 'We could not verify this checkout. Please try again later.';
-      });
-    }
-  </script>
+  <h1>Success</h1>
+  <p>Your subscription has been completed.</p>
 </SiteLayout>
