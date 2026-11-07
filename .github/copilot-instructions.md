@@ -9,5 +9,11 @@
 
 ## Validation
 
-- Run `bun run check` and `bun run build` after code changes.
+- Run `bun run check`, `bun run build` and `bun run test` after code changes.
 - Follow the setup and deployment guidance in [README.md](../README.md).
+
+## Documentation
+
+- Keep `/docs` folder up-to-date with code changes.
+- Use JSDoc comments for functions and modules where appropriate.
+- Ensure README.md reflects the current setup and deployment instructions.
