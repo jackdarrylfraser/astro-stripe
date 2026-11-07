@@ -61,7 +61,7 @@ astro-stripe/
 |---|---|
 | `src/content.config.ts` | Define the Markdown content collection, schema, and loader for member pages. |
 | `src/lib/auth.ts` | Resolve the email identity from a valid Redis-backed login session and create/revoke those sessions. |
-| `src/lib/redis.ts` | Initialize the Upstash Redis client using `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`. |
+| `src/lib/redis.ts` | Initialize the Upstash Redis client using `KV_REST_API_URL` and `KV_REST_API_TOKEN`, with legacy Upstash names as fallbacks. |
 | `src/lib/stripe.ts` | Initialize and export the Stripe SDK client in server-only code. |
 | `src/lib/subscriptions.ts` | Read, refresh, and update subscription records in Upstash Redis by normalized email; normalize Stripe events into the app's record shape. |
 | `src/lib/authorization.ts`, `src/middleware.ts` | Apply the subscription policy to protected page requests and send unauthenticated or inactive users to the appropriate page. |
@@ -327,8 +327,8 @@ Set `output: 'server'` and the Vercel adapter in Astro configuration so protecte
 RESEND_API_KEY=
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
-UPSTASH_REDIS_REST_URL=
-UPSTASH_REDIS_REST_TOKEN=
+KV_REST_API_URL=
+KV_REST_API_TOKEN=
 ```
 
 Never expose secret values to client-side code or commit them.

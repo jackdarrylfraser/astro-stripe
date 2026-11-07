@@ -19,6 +19,8 @@ An Astro SSR site with Stripe subscription-gated Markdown pages. Subscribers sig
 
 The app requires the Payment Link ID and URL, Stripe API and webhook secrets, Upstash Redis REST credentials, a Resend API key and sender, and a canonical `SITE_URL`. See `.env.example` for exact names. Do not expose server secrets through `PUBLIC_` variables.
 
+For Redis, use Upstash's `KV_REST_API_URL` and `KV_REST_API_TOKEN`. The app needs the read/write token, not `KV_REST_API_READ_ONLY_TOKEN`; `REDIS_URL` and `KV_URL` are not REST URLs. Existing deployments may continue using `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` as fallbacks. If both names are set, the `KV_` values take precedence.
+
 ## Deploy
 
 Import the repository into Vercel and use the Bun install command (`bun install`) if it is not detected automatically. Configure the environment variables separately for Preview (Stripe test mode) and Production (Stripe live mode). The Astro Vercel adapter deploys SSR pages and API routes on the Node.js runtime.
