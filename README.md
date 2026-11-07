@@ -21,9 +21,9 @@ The app requires the Payment Link ID and URL, Stripe API and webhook secrets, Up
 
 The server chooses the origin for magic links and Stripe portal returns as follows:
 
-- On Vercel Production, `SITE_URL` takes precedence and must be an HTTPS origin for the intended custom domain. If unset, the app uses `VERCEL_PROJECT_PRODUCTION_URL`, which Vercel chooses and may not be your preferred domain.
-- On Vercel Preview, it uses `VERCEL_BRANCH_URL`, or `VERCEL_URL` if no branch URL is available, regardless of `SITE_URL`. These are hostnames supplied by Vercel, not URLs with a scheme.
-- Locally, `SITE_URL` overrides the default `http://localhost:4321`. For non-Vercel production deployments, set `SITE_URL` explicitly.
+- On Vercel Production, it uses `VERCEL_PROJECT_PRODUCTION_URL`. Vercel chooses the shortest production custom domain, or the project's vercel.app domain if no custom domain is available; this may not be your preferred domain.
+- On Vercel Preview, it uses `VERCEL_BRANCH_URL`, or `VERCEL_URL` if no branch URL is available. These variables are hostnames supplied by Vercel, not URLs with a scheme.
+- Locally, it uses `http://localhost:4321`; run the development server on that host and port.
 
 Enable **Automatically expose System Environment Variables** in Vercel project settings. URL generation fails rather than producing a localhost or malformed link when the necessary deployment origin is unavailable. These values are used only on the server; the browser uses relative URLs, so no `PUBLIC_` base URL is needed.
 
