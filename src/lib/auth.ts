@@ -1,4 +1,4 @@
-import { kv } from '@vercel/kv';
+import { redis } from './redis';
 import { normalizeEmail } from './subscriptions';
 import { createToken, hashToken } from './tokens';
 
@@ -21,7 +21,7 @@ export async function getCurrentIdentity(
   if (!cookieValue) {
     return null;
   }
-  const record = await kv.get<LoginSessionRecord>(
+  const record = await redis.get<LoginSessionRecord>(
     loginSessionKey(await hashToken(cookieValue)),
   );
   if (!record || record.expiresAt <= Date.now()) {
@@ -38,7 +38,7 @@ export async function createLoginSession(
     email: normalizeEmail(email),
     expiresAt: Date.now() + LOGIN_SESSION_TTL_SECONDS * 1000,
   };
-  await kv.set(
+  await redis.set(
     loginSessionKey(await hashToken(cookieValue)),
     record,
     { ex: LOGIN_SESSION_TTL_SECONDS },
@@ -50,13 +50,13 @@ export async function revokeLoginSession(
   cookieValue: string | undefined,
 ): Promise<void> {
   if (cookieValue) {
-    await kv.del(loginSessionKey(await hashToken(cookieValue)));
+    await redis.del(loginSessionKey(await hashToken(cookieValue)));
   }
 }
 
 export async function createMagicLink(email: string): Promise<string> {
   const token = createToken();
-  await kv.set(
+  await redis.set(
     magicLinkKey(await hashToken(token)),
     { email: normalizeEmail(email) },
     { ex: MAGIC_LINK_TTL_SECONDS, nx: true },
@@ -68,7 +68,7 @@ export async function redeemMagicLink(
   token: string,
 ): Promise<{ email: string } | null> {
   const key = magicLinkKey(await hashToken(token));
-  const value = await kv.getdel<{ email: string }>(key);
+  const value = await redis.getdel<{ email: string }>(key);
   return value ? { email: normalizeEmail(value.email) } : null;
 }
 

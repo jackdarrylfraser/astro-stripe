@@ -1,4 +1,4 @@
-import { kv } from '@vercel/kv';
+import { redis } from './redis';
 import type Stripe from 'stripe';
 import { stripe } from './stripe';
 
@@ -30,28 +30,28 @@ const subscriptionPeriodEnd = (subscription: Stripe.Subscription): number =>
 export function getSubscriptionByEmail(
   email: string,
 ): Promise<SubscriptionRecord | null> {
-  return kv.get<SubscriptionRecord>(subscriptionKey(email));
+  return redis.get<SubscriptionRecord>(subscriptionKey(email));
 }
 
 export async function saveSubscription(
   updatedRecord: SubscriptionRecord,
 ): Promise<void> {
   const email = normalizeEmail(updatedRecord.email);
-  const previousEmail = await kv.get<string>(
+  const previousEmail = await redis.get<string>(
     customerEmailKey(updatedRecord.stripeCustomerId),
   );
   if (previousEmail && previousEmail !== email) {
     const previousRecord = await getSubscriptionByEmail(previousEmail);
     if (previousRecord?.stripeCustomerId === updatedRecord.stripeCustomerId) {
-      await kv.del(subscriptionKey(previousEmail));
+      await redis.del(subscriptionKey(previousEmail));
     }
   }
-  await kv.set(subscriptionKey(email), {
+  await redis.set(subscriptionKey(email), {
     ...updatedRecord,
     email,
     checkedAt: Date.now(),
   });
-  await kv.set(customerEmailKey(updatedRecord.stripeCustomerId), email);
+  await redis.set(customerEmailKey(updatedRecord.stripeCustomerId), email);
 }
 
 export async function deleteSubscriptionIfMatches(
@@ -60,8 +60,8 @@ export async function deleteSubscriptionIfMatches(
 ): Promise<void> {
   const current = await getSubscriptionByEmail(email);
   if (current?.stripeSubscriptionId === subscriptionId) {
-    await kv.del(subscriptionKey(email));
-    await kv.del(customerEmailKey(current.stripeCustomerId));
+    await redis.del(subscriptionKey(email));
+    await redis.del(customerEmailKey(current.stripeCustomerId));
   }
 }
 
@@ -109,14 +109,14 @@ export async function syncCustomerSubscriptions(
   excludedSubscriptionId?: string,
 ): Promise<SubscriptionRecord | null> {
   const customer = await stripe.customers.retrieve(customerId);
-  const previousEmail = await kv.get<string>(customerEmailKey(customerId));
+  const previousEmail = await redis.get<string>(customerEmailKey(customerId));
   if (customer.deleted || !customer.email) {
     if (previousEmail) {
       const previous = await getSubscriptionByEmail(previousEmail);
       if (previous?.stripeCustomerId === customerId) {
-        await kv.del(subscriptionKey(previousEmail));
+        await redis.del(subscriptionKey(previousEmail));
       }
-      await kv.del(customerEmailKey(customerId));
+      await redis.del(customerEmailKey(customerId));
     }
     return null;
   }
@@ -125,11 +125,11 @@ export async function syncCustomerSubscriptions(
   if (previousEmail && previousEmail !== email) {
     const previous = await getSubscriptionByEmail(previousEmail);
     if (previous?.stripeCustomerId === customerId) {
-      await kv.del(subscriptionKey(previousEmail));
+      await redis.del(subscriptionKey(previousEmail));
     }
   }
 
-  await kv.set(customerEmailKey(customerId), email);
+  await redis.set(customerEmailKey(customerId), email);
   return refreshSubscriptionByEmail(email, excludedSubscriptionId);
 }
 

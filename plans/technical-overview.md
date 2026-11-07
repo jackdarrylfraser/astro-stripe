@@ -1,6 +1,6 @@
 # Technical overview
 
-This document describes the implementation of the subscription-gated Astro site, following the higher-level decisions in [`plan.md`](./plan.md). The code is organized as an Astro SSR application using the Vercel adapter, Stripe, Vercel KV, and Resend.
+This document describes the implementation of the subscription-gated Astro site, following the higher-level decisions in [`plan.md`](./plan.md). The code is organized as an Astro SSR application using the Vercel adapter, Stripe, Upstash Redis, and Resend.
 
 ## Application structure
 
@@ -27,6 +27,7 @@ astro-stripe/
 │   │   ├── auth.ts
 │   │   ├── authorization.ts
 │   │   ├── env.ts
+│   │   ├── redis.ts
 │   │   ├── stripe.ts
 │   │   ├── subscriptions.ts
 │   │   └── tokens.ts
@@ -59,13 +60,14 @@ astro-stripe/
 | Area | Responsibility |
 |---|---|
 | `src/content.config.ts` | Define the Markdown content collection, schema, and loader for member pages. |
-| `src/lib/auth.ts` | Resolve the email identity from a valid KV-backed login session and create/revoke those sessions. |
+| `src/lib/auth.ts` | Resolve the email identity from a valid Redis-backed login session and create/revoke those sessions. |
+| `src/lib/redis.ts` | Initialize the Upstash Redis client using `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`. |
 | `src/lib/stripe.ts` | Initialize and export the Stripe SDK client in server-only code. |
-| `src/lib/subscriptions.ts` | Read, refresh, and update subscription records in Vercel KV by normalized email; normalize Stripe events into the app's record shape. |
+| `src/lib/subscriptions.ts` | Read, refresh, and update subscription records in Upstash Redis by normalized email; normalize Stripe events into the app's record shape. |
 | `src/lib/authorization.ts`, `src/middleware.ts` | Apply the subscription policy to protected page requests and send unauthenticated or inactive users to the appropriate page. |
-| `src/pages/checkout/success.astro`, `src/pages/api/stripe/checkout-complete.ts` | Verify a completed Payment Link Checkout Session, write the subscription record to KV by email, and establish the first KV-backed login session for that email; no account is created. |
-| `src/pages/api/auth/magic-link.ts`, `src/pages/api/auth/verify.ts` | Send and redeem one-time email magic links without creating user/account records; create KV-backed login sessions after successful verification. |
-| `src/pages/api/auth/logout.ts` | Delete the current KV login-session record and clear its browser cookie without deleting subscription state. |
+| `src/pages/checkout/success.astro`, `src/pages/api/stripe/checkout-complete.ts` | Verify a completed Payment Link Checkout Session, write the subscription record to Redis by email, and establish the first Redis-backed login session for that email; no account is created. |
+| `src/pages/api/auth/magic-link.ts`, `src/pages/api/auth/verify.ts` | Send and redeem one-time email magic links without creating user/account records; create Redis-backed login sessions after successful verification. |
+| `src/pages/api/auth/logout.ts` | Delete the current Redis login-session record and clear its browser cookie without deleting subscription state. |
 | `src/pages/api/stripe/webhook.ts` | Verify Stripe webhook signatures and synchronize subscription state, including deleting only the matching record after cancellation takes effect. |
 | `src/content/members/`, `src/pages/members/[...slug].astro` | Keep member Markdown as source content and render it through a server-protected Astro route. |
 | `src/pages/`, `src/layouts/` | Public landing/pricing pages, magic-link sign-in UI, shared layout, a direct Stripe Payment Link, and buttons that call app API routes where needed. |
@@ -75,7 +77,7 @@ astro-stripe/
 
 ## Core types and server clients
 
-The KV subscription record is a cache/projection of Stripe state, refreshed by verified Stripe webhooks and direct Stripe checks when the cache is missing or stale. A browser redirect alone is never proof of purchase; the Checkout completion endpoint retrieves and validates the session from Stripe.
+The Redis subscription record is a cache/projection of Stripe state, refreshed by verified Stripe webhooks and direct Stripe checks when the cache is missing or stale. A browser redirect alone is never proof of purchase; the Checkout completion endpoint retrieves and validates the session from Stripe.
 
 ```ts
 // src/lib/subscriptions.ts
@@ -117,10 +119,10 @@ export const stripe = new Stripe(import.meta.env.STRIPE_SECRET_KEY, {
 });
 ```
 
-Normalize authenticated and Stripe-provided email addresses consistently (trim whitespace and lowercase; do not apply provider-specific alias rules). Use that normalized email as the KV key, for example `subscription:${normalizedEmail}`:
+Normalize authenticated and Stripe-provided email addresses consistently (trim whitespace and lowercase; do not apply provider-specific alias rules). Use that normalized email as the Redis key, for example `subscription:${normalizedEmail}`:
 
 ```ts
-import { kv } from '@vercel/kv';
+import { redis } from './redis';
 
 export const normalizeEmail = (email: string): string =>
   email.trim().toLowerCase();
@@ -138,31 +140,31 @@ const magicLinkKey = (tokenHash: string): string =>
 export function getSubscriptionByEmail(
   email: string,
 ): Promise<SubscriptionRecord | null> {
-  return kv.get<SubscriptionRecord>(subscriptionKey(email));
+  return redis.get<SubscriptionRecord>(subscriptionKey(email));
 }
 
 export async function saveSubscription(
   updatedRecord: SubscriptionRecord,
 ): Promise<void> {
   const email = normalizeEmail(updatedRecord.email);
-  const previousEmail = await kv.get<string>(
+  const previousEmail = await redis.get<string>(
     customerEmailKey(updatedRecord.stripeCustomerId),
   );
   if (previousEmail && previousEmail !== email) {
-    await kv.del(subscriptionKey(previousEmail));
+    await redis.del(subscriptionKey(previousEmail));
   }
-  await kv.set(subscriptionKey(email), {
+  await redis.set(subscriptionKey(email), {
     ...updatedRecord,
     email,
     checkedAt: Date.now(),
   });
-  await kv.set(customerEmailKey(updatedRecord.stripeCustomerId), email);
+  await redis.set(customerEmailKey(updatedRecord.stripeCustomerId), email);
 }
 ```
 
-The normalized email is the identity and subscription key; there is no user/account table or app-user-to-Stripe-customer mapping. `checkedAt` controls how long a cached Stripe status may be trusted; use a short configurable freshness window and let webhooks refresh state sooner. `getFreshSubscriptionByEmail` returns a recent KV record or, if missing/stale, queries Stripe for the customer and its subscription using the normalized email, updates KV, and fails closed if Stripe cannot verify active access. Stripe API checks verify subscription entitlement, not login credentials; magic-link redemption verifies control of the email address. Stripe webhooks also update KV. The `stripe-customer-email` index lets webhook processing invalidate the previous email key if a customer changes their Stripe email.
+The normalized email is the identity and subscription key; there is no user/account table or app-user-to-Stripe-customer mapping. `checkedAt` controls how long a cached Stripe status may be trusted; use a short configurable freshness window and let webhooks refresh state sooner. `getFreshSubscriptionByEmail` returns a recent Redis record or, if missing/stale, queries Stripe for the customer and its subscription using the normalized email, updates Redis, and fails closed if Stripe cannot verify active access. Stripe API checks verify subscription entitlement, not login credentials; magic-link redemption verifies control of the email address. Stripe webhooks also update Redis. The `stripe-customer-email` index lets webhook processing invalidate the previous email key if a customer changes their Stripe email.
 
-Login sessions and magic-link tokens are separate from subscription records. Store only hashes of random, high-entropy tokens in KV, with short expirations for magic links and bounded expirations for login sessions. The browser receives the raw login token only in a `Secure`, `HttpOnly`, `SameSite=Lax` cookie. On logout, delete the matching KV login-session record and clear the cookie; do not delete the subscription record. Use an atomic one-time claim for Checkout Session IDs and magic-link tokens so retries or replays cannot create duplicate sessions.
+Login sessions and magic-link tokens are separate from subscription records. Store only hashes of random, high-entropy tokens in Redis, with short expirations for magic links and bounded expirations for login sessions. The browser receives the raw login token only in a `Secure`, `HttpOnly`, `SameSite=Lax` cookie. On logout, delete the matching Redis login-session record and clear the cookie; do not delete the subscription record. Use an atomic one-time claim for Checkout Session IDs and magic-link tokens so retries or replays cannot create duplicate sessions.
 
 ## Email login and subscription gate
 
@@ -188,7 +190,7 @@ export async function createLoginSession(
 export async function revokeLoginSession(cookieValue: string): Promise<void>;
 ```
 
-Use email delivery for magic links, but do not configure an auth adapter that persists users or accounts. The first successful purchase establishes a login session only after the server verifies its Checkout Session. Later, a customer requests a magic link; issue it only after confirming an active subscription from a fresh KV record or Stripe, return a generic response that does not reveal whether the email is subscribed, and atomically redeem its one-time token to create a login session. Middleware resolves the normalized email from the KV login session and checks subscription state:
+Use email delivery for magic links, but do not configure an auth adapter that persists users or accounts. The first successful purchase establishes a login session only after the server verifies its Checkout Session. Later, a customer requests a magic link; issue it only after confirming an active subscription from a fresh Redis record or Stripe, return a generic response that does not reveal whether the email is subscribed, and atomically redeem its one-time token to create a login session. Middleware resolves the normalized email from the Redis login session and checks subscription state:
 
 ```ts
 // src/middleware.ts
@@ -241,10 +243,10 @@ export function hasActiveAccess(
 2. The pricing page links directly to the Stripe Payment Link. Configure the link in Stripe for the recurring Price and subscription mode; no app endpoint is needed to start checkout.
 3. Stripe hosts Checkout, collects the customer's email, and creates the Stripe customer for the subscription.
 4. Configure the Payment Link to redirect after successful payment to `/checkout/success?session_id={CHECKOUT_SESSION_ID}`. The success page sends the session ID to `POST /api/stripe/checkout-complete`; the ID is only a lookup key, never proof of purchase.
-5. The completion route retrieves the session directly from Stripe and verifies it is complete, is for the expected subscription Payment Link, and has the required paid status. It derives the email and customer ID only from the verified Stripe session, normalizes the email, retrieves the current subscription state from Stripe, and upserts that record in KV.
-6. Only after successful verification, establish a KV login session for that normalized email and set the session cookie. This is the email's first login; do not create an app account or user record. Make completion idempotent using an atomic Checkout Session ID claim so retries cannot mint extra login sessions. Never trust a request email or the Payment Link return URL as proof of purchase.
-7. On later visits, validate the cookie against the KV login-session record. For a logged-out subscriber, send a one-time magic link to the email; on redemption, re-check active subscription state from fresh KV or Stripe before issuing a new session.
-8. Logout deletes only the current KV login-session record and clears the browser cookie. Keep the email-keyed subscription record so the customer can log in again.
+5. The completion route retrieves the session directly from Stripe and verifies it is complete, is for the expected subscription Payment Link, and has the required paid status. It derives the email and customer ID only from the verified Stripe session, normalizes the email, retrieves the current subscription state from Stripe, and upserts that record in Redis.
+6. Only after successful verification, establish a Redis login session for that normalized email and set the session cookie. This is the email's first login; do not create an app account or user record. Make completion idempotent using an atomic Checkout Session ID claim so retries cannot mint extra login sessions. Never trust a request email or the Payment Link return URL as proof of purchase.
+7. On later visits, validate the cookie against the Redis login-session record. For a logged-out subscriber, send a one-time magic link to the email; on redemption, re-check active subscription state from fresh Redis or Stripe before issuing a new session.
+8. Logout deletes only the current Redis login-session record and clears the browser cookie. Keep the email-keyed subscription record so the customer can log in again.
 
 The pricing CTA links directly to the configured Stripe Payment Link URL:
 
@@ -256,11 +258,11 @@ The Checkout session is the first-login proof only after its details are retriev
 
 ## Stripe-hosted subscription management
 
-The authenticated `/api/stripe/portal` route resolves the email from the KV-backed login session, resolves its current Stripe customer, creates a Stripe Billing Portal session, and redirects to Stripe's hosted Portal. It does not modify KV. The member page links to this route; there is no app-built subscription-management page.
+The authenticated `/api/stripe/portal` route resolves the email from the Redis-backed login session, resolves its current Stripe customer, creates a Stripe Billing Portal session, and redirects to Stripe's hosted Portal. It does not modify Redis. The member page links to this route; there is no app-built subscription-management page.
 
-## Webhook and KV synchronization
+## Webhook and Redis synchronization
 
-Configure a Stripe webhook endpoint for `customer.updated`, `customer.subscription.created`, `customer.subscription.updated`, and `customer.subscription.deleted`. Verify the signature against the unparsed request body before acting. For subscription creation and update events, retrieve the Stripe customer server-side to obtain the current customer email, normalize it, and update the subscription record keyed by that email. When Stripe sends `customer.subscription.deleted`, remove that subscription from KV (only if the stored record still refers to that subscription). A cancellation scheduled for the end of the billing period is not a deletion: keep the record and update its status from `customer.subscription.updated` until Stripe reports the subscription deleted. On `customer.updated`, invalidate the old email key and reconcile the customer's current subscription records under the updated email:
+Configure a Stripe webhook endpoint for `customer.updated`, `customer.subscription.created`, `customer.subscription.updated`, and `customer.subscription.deleted`. Verify the signature against the unparsed request body before acting. For subscription creation and update events, retrieve the Stripe customer server-side to obtain the current customer email, normalize it, and update the subscription record keyed by that email. When Stripe sends `customer.subscription.deleted`, remove that subscription from Redis (only if the stored record still refers to that subscription). A cancellation scheduled for the end of the billing period is not a deletion: keep the record and update its status from `customer.subscription.updated` until Stripe reports the subscription deleted. On `customer.updated`, invalidate the old email key and reconcile the customer's current subscription records under the updated email:
 
 ```ts
 // src/pages/api/stripe/webhook.ts (core operations)
@@ -325,18 +327,18 @@ Set `output: 'server'` and the Vercel adapter in Astro configuration so protecte
 RESEND_API_KEY=
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
-KV_REST_API_URL=
-KV_REST_API_TOKEN=
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
 ```
 
-Never expose secret values to client-side code or commit them. Verify exact environment variable names against the selected email-delivery and KV packages during implementation.
+Never expose secret values to client-side code or commit them.
 
 ## Suggested implementation order
 
 1. Add Astro SSR, the Vercel adapter, and environment-variable validation.
-2. Implement magic-link email delivery, KV-backed login sessions, session revocation, and confirm that server routes resolve an email without persisting user/account records.
-3. Add the Stripe client and email-keyed subscription records in KV.
-4. Configure the Stripe Payment Link and its success redirect; implement the endpoint that creates a Stripe Customer Portal session and redirects to it without changing KV.
-5. Implement signature-verified, idempotent webhook synchronization, including removing the matching KV subscription only after Stripe reports it deleted.
+2. Implement magic-link email delivery, Redis-backed login sessions, session revocation, and confirm that server routes resolve an email without persisting user/account records.
+3. Add the Stripe client and email-keyed subscription records in Redis.
+4. Configure the Stripe Payment Link and its success redirect; implement the endpoint that creates a Stripe Customer Portal session and redirects to it without changing Redis.
+5. Implement signature-verified, idempotent webhook synchronization, including removing the matching Redis subscription only after Stripe reports it deleted.
 6. Add the middleware access policy and server-rendered member Markdown route.
-7. Test first login from verified Checkout, magic-link login, token/session expiry, logout revocation, KV cache hits and Stripe fallback, inactive/active/trialing/canceled subscriptions, and webhook retries in Stripe test mode.
+7. Test first login from verified Checkout, magic-link login, token/session expiry, logout revocation, Redis cache hits and Stripe fallback, inactive/active/trialing/canceled subscriptions, and webhook retries in Stripe test mode.

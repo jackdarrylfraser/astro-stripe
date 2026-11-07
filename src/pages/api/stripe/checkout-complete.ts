@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
-import { kv } from '@vercel/kv';
 import { createLoginSession, loginSessionTtlSeconds } from '../../../lib/auth';
 import { requiredEnv } from '../../../lib/env';
+import { redis } from '../../../lib/redis';
 import { stripe } from '../../../lib/stripe';
 import { mapStripeSubscription, saveSubscription } from '../../../lib/subscriptions';
 
@@ -51,7 +51,10 @@ export const POST: APIRoute = async ({ request, cookies }) => {
       ? await stripe.subscriptions.retrieve(session.subscription)
       : session.subscription;
   const checkoutKey = `checkout-completion:${session.id}`;
-  const claimed = await kv.set(checkoutKey, 'complete', { nx: true, ex: 60 * 60 * 24 * 30 });
+  const claimed = await redis.set(checkoutKey, 'complete', {
+    nx: true,
+    ex: 60 * 60 * 24 * 30,
+  });
   if (claimed !== 'OK') {
     return new Response('Checkout Session has already been processed', { status: 409 });
   }
