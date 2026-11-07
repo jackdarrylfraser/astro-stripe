@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { getCurrentIdentity } from '../../../lib/auth';
-import { requiredEnv } from '../../../lib/env';
+import { getSiteUrl } from '../../../lib/site-url';
 import { getFreshSubscriptionByEmail } from '../../../lib/subscriptions';
 import { stripe } from '../../../lib/stripe';
 
@@ -19,7 +19,7 @@ export const GET: APIRoute = async ({ cookies, redirect }) => {
 
   const portal = await stripe.billingPortal.sessions.create({
     customer: subscription.stripeCustomerId,
-    return_url: new URL('/members', requiredEnv('SITE_URL')).toString(),
+    return_url: new URL('/members', getSiteUrl()).toString(),
   });
   return redirect(portal.url);
 };

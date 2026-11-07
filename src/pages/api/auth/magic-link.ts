@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { createMagicLink } from '../../../lib/auth';
+import { getSiteUrl } from '../../../lib/site-url';
 import { requiredEnv } from '../../../lib/env';
 import { hasActiveAccess } from '../../../lib/authorization';
 import { getFreshSubscriptionByEmail, normalizeEmail } from '../../../lib/subscriptions';
@@ -38,9 +39,8 @@ export const POST: APIRoute = async ({ request }) => {
     return genericResponse();
   }
 
+  const verifyUrl = new URL('/api/auth/verify', getSiteUrl());
   const token = await createMagicLink(email);
-  const siteUrl = requiredEnv('SITE_URL').replace(/\/$/, '');
-  const verifyUrl = new URL('/api/auth/verify', siteUrl);
   verifyUrl.searchParams.set('token', token);
   const delivery = await fetch('https://api.resend.com/emails', {
     method: 'POST',
