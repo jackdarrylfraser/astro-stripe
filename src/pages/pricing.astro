@@ -1,0 +1,9 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+---
+
+<SiteLayout title="Subscribe | Astro Stripe">
+  <h1>Become a member</h1>
+  <p>Subscribe using Stripe Checkout to get access to the member library.</p>
+  <a class="button" href={import.meta.env.STRIPE_PAYMENT_LINK_URL}>Subscribe</a>
+</SiteLayout>

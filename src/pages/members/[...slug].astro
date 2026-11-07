@@ -1,0 +1,19 @@
+---
+import { getEntry, render } from 'astro:content';
+import SiteLayout from '../../layouts/SiteLayout.astro';
+
+const slug = Astro.params.slug;
+const entry = slug ? await getEntry('members', slug) : undefined;
+if (!entry) {
+  return new Response('Not found', { status: 404 });
+}
+const { Content } = await render(entry);
+---
+
+<SiteLayout title={`${entry.data.title} | Astro Stripe`} description={entry.data.description}>
+  <article>
+    <h1>{entry.data.title}</h1>
+    <Content />
+  </article>
+  <p><a href="/members">Back to member library</a></p>
+</SiteLayout>

@@ -1,0 +1,19 @@
+---
+import SiteLayout from '../../layouts/SiteLayout.astro';
+import { getCollection } from 'astro:content';
+
+const entries = await getCollection('members');
+---
+
+<SiteLayout title="Member library | Astro Stripe">
+  <h1>Member library</h1>
+  <ul>
+    {entries.map((entry) => (
+      <li><a href={`/members/${entry.id}`}>{entry.data.title}</a></li>
+    ))}
+  </ul>
+  <form action="/api/auth/logout" method="post">
+    <button type="submit">Sign out</button>
+  </form>
+  <p><a href="/api/stripe/portal">Manage subscription</a></p>
+</SiteLayout>

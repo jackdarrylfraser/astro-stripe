@@ -1,0 +1,36 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+---
+
+<SiteLayout title="Sign in | Astro Stripe">
+  <h1>Sign in with email</h1>
+  <p>We'll email you a one-time sign-in link if your subscription is active.</p>
+  <form id="magic-link-form">
+    <label for="email">Email address</label>
+    <input id="email" name="email" type="email" autocomplete="email" required />
+    <button type="submit">Email me a sign-in link</button>
+  </form>
+  <p id="message" class="message" role="status" aria-live="polite"></p>
+  <script>
+    const form = document.querySelector<HTMLFormElement>('#magic-link-form');
+    const message = document.querySelector<HTMLElement>('#message');
+    form?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!form || !message) return;
+      message.textContent = 'Sending…';
+      const email = new FormData(form).get('email');
+      try {
+        const response = await fetch('/api/auth/magic-link', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        });
+        message.textContent = response.ok
+          ? 'If that email has an active subscription, a sign-in link is on its way.'
+          : 'We could not send your sign-in link. Please try again later.';
+      } catch {
+        message.textContent = 'We could not send your sign-in link. Please try again later.';
+      }
+    });
+  </script>
+</SiteLayout>

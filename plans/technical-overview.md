@@ -1,8 +1,8 @@
 # Technical overview
 
-This document turns [`plans/plan.md`](./plans/plan.md) into a proposed implementation blueprint for a subscription-gated Astro site. The directory tree and application files below are recommendations; they are not present in the repository yet. The repository currently contains `.gitignore`, `README.md`, `plans/plan.md`, and this overview; the application source has not been created.
+This document describes the implementation of the subscription-gated Astro site, following the higher-level decisions in [`plan.md`](./plan.md). The code is organized as an Astro SSR application using the Vercel adapter, Stripe, Vercel KV, and Resend.
 
-## Proposed directory structure
+## Application structure
 
 ```text
 astro-stripe/
@@ -12,15 +12,12 @@ astro-stripe/
 ├── package.json
 ├── bun.lock
 ├── README.md
-├── technical-overview.md
 ├── plans/
-│   └── plan.md
+│   ├── plan.md
+│   └── technical-overview.md
 ├── src/
 │   ├── content.config.ts
 │   ├── middleware.ts
-│   ├── components/
-│   │   ├── MagicLinkForm.astro
-│   │   └── SubscriptionActions.astro
 │   ├── content/
 │   │   └── members/
 │   │       └── example.md
@@ -28,14 +25,19 @@ astro-stripe/
 │   │   └── SiteLayout.astro
 │   ├── lib/
 │   │   ├── auth.ts
+│   │   ├── authorization.ts
+│   │   ├── env.ts
 │   │   ├── stripe.ts
 │   │   ├── subscriptions.ts
-│   │   └── authorization.ts
+│   │   └── tokens.ts
+│   ├── types/
+│   │   └── locals.ts
 │   ├── pages/
 │   │   ├── index.astro
 │   │   ├── pricing.astro
 │   │   ├── sign-in.astro
 │   │   ├── members/
+│   │   │   ├── index.astro
 │   │   │   └── [...slug].astro
 │   │   ├── checkout/
 │   │   │   └── success.astro
@@ -48,13 +50,11 @@ astro-stripe/
 │   │           ├── magic-link.ts
 │   │           ├── verify.ts
 │   │           └── logout.ts
-│   └── types/
-│       └── locals.ts
-└── public/
-    └── (public assets only)
+│   └── env.d.ts
+└── tsconfig.json
 ```
 
-`astro.config.mjs` enables Astro server rendering and the Vercel adapter. The dynamic pages and API routes run as serverless functions. `bun.lock` is included if the project adopts Bun as the plan suggests; application code should still use APIs supported by the Node.js runtime.
+`astro.config.mjs` enables Astro server rendering and the Vercel adapter. Dynamic pages and API routes run as serverless functions. The Vercel adapter uses the Node.js runtime; application code avoids Bun-only APIs.
 
 | Area | Responsibility |
 |---|---|
@@ -66,10 +66,11 @@ astro-stripe/
 | `src/pages/checkout/success.astro`, `src/pages/api/stripe/checkout-complete.ts` | Verify a completed Payment Link Checkout Session, write the subscription record to KV by email, and establish the first KV-backed login session for that email; no account is created. |
 | `src/pages/api/auth/magic-link.ts`, `src/pages/api/auth/verify.ts` | Send and redeem one-time email magic links without creating user/account records; create KV-backed login sessions after successful verification. |
 | `src/pages/api/auth/logout.ts` | Delete the current KV login-session record and clear its browser cookie without deleting subscription state. |
-| `src/pages/api/stripe/webhook.ts` | Verify Stripe webhook signatures, synchronize subscription state |
+| `src/pages/api/stripe/webhook.ts` | Verify Stripe webhook signatures and synchronize subscription state, including deleting only the matching record after cancellation takes effect. |
 | `src/content/members/`, `src/pages/members/[...slug].astro` | Keep member Markdown as source content and render it through a server-protected Astro route. |
-| `src/pages/`, `src/components/`, `src/layouts/` | Public landing/pricing pages, magic-link sign-in UI, shared layout, a direct Stripe Payment Link, and buttons that call app API routes where needed. |
-| `src/types/locals.ts` | Augment Astro's `App.Locals` type with the email identity resolved from the KV login session. |
+| `src/pages/`, `src/layouts/` | Public landing/pricing pages, magic-link sign-in UI, shared layout, a direct Stripe Payment Link, and buttons that call app API routes where needed. |
+| `src/env.d.ts` | Type the required server-side environment variables and Astro client types. |
+| `src/types/locals.ts` | Augment Astro locals for the email identity resolved from the login-session cookie. |
 | `.env.example` | Document required environment variable names without storing real credentials. |
 
 ## Core types and server clients
@@ -111,7 +112,9 @@ export function mapStripeSubscription(
 // src/lib/stripe.ts
 import Stripe from 'stripe';
 
-export const stripe = new Stripe(import.meta.env.STRIPE_SECRET_KEY);
+export const stripe = new Stripe(import.meta.env.STRIPE_SECRET_KEY, {
+  apiVersion: '2025-08-27.basil',
+});
 ```
 
 Normalize authenticated and Stripe-provided email addresses consistently (trim whitespace and lowercase; do not apply provider-specific alias rules). Use that normalized email as the KV key, for example `subscription:${normalizedEmail}`:
@@ -243,17 +246,17 @@ export function hasActiveAccess(
 7. On later visits, validate the cookie against the KV login-session record. For a logged-out subscriber, send a one-time magic link to the email; on redemption, re-check active subscription state from fresh KV or Stripe before issuing a new session.
 8. Logout deletes only the current KV login-session record and clears the browser cookie. Keep the email-keyed subscription record so the customer can log in again.
 
-Put the actual Stripe Payment Link URL directly in the pricing CTA's `href`:
+The pricing CTA links directly to the configured Stripe Payment Link URL:
 
 ```astro
-<a href="https://buy.stripe.com/your-payment-link">Subscribe</a>
+<a href={import.meta.env.STRIPE_PAYMENT_LINK_URL}>Subscribe</a>
 ```
 
-The Checkout session is the first-login proof only after its details are retrieved and validated server-side. Subsequent identity proof comes from redeeming a single-use magic link sent to the same email. Subscription status is separate from login state and must be active or trialing according to the policy below. Require one Stripe customer/subscription per normalized email, or define deterministic handling for duplicates so email lookup cannot grant ambiguous access. If the customer changes their Stripe email, synchronize the record to the new email and invalidate the old email key.
+The Checkout session is the first-login proof only after its details are retrieved and validated server-side. Subsequent identity proof comes from redeeming a single-use magic link sent to the same email; its GET page requires an explicit confirmation POST so email link scanners do not consume the token. Subscription status is separate from login state and must be active or trialing according to the policy below. If email lookup finds duplicates, reconciliation consistently prefers active/trialing subscriptions, then the furthest period end, then the newest subscription (with ID as a stable final tie-breaker). If the customer changes their Stripe email, synchronize the record to the new email and invalidate the old email key.
 
 ## Stripe-hosted subscription management
 
-Link directly to stripes builtin management page directly from html.
+The authenticated `/api/stripe/portal` route resolves the email from the KV-backed login session, resolves its current Stripe customer, creates a Stripe Billing Portal session, and redirects to Stripe's hosted Portal. It does not modify KV. The member page links to this route; there is no app-built subscription-management page.
 
 ## Webhook and KV synchronization
 

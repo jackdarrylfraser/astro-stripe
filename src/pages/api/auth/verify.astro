@@ -1,0 +1,42 @@
+---
+export const prerender = false;
+
+const noCacheHeaders = {
+  'Cache-Control': 'no-store',
+  'Referrer-Policy': 'no-referrer',
+};
+
+for (const [name, value] of Object.entries(noCacheHeaders)) {
+  Astro.response.headers.set(name, value);
+}
+
+const token = Astro.url.searchParams.get('token');
+const validToken = token && /^[a-f0-9]{64}$/.test(token);
+
+if (!validToken) {
+  Astro.response.status = 400;
+}
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Confirm sign in</title>
+  </head>
+  <body>
+    {validToken ? (
+      <>
+        <h1>Confirm sign in</h1>
+        <p>Continue to sign in to your account.</p>
+        <form method="post" action="/api/auth/verify/complete">
+          <input type="hidden" name="token" value={token} />
+          <button type="submit">Continue</button>
+        </form>
+      </>
+    ) : (
+      <p>Invalid or expired sign-in link</p>
+    )}
+  </body>
+</html>
